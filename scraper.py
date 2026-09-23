@@ -1,4 +1,5 @@
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 import requests
 
 
@@ -27,11 +28,12 @@ def fetch_website_contents(url):
 
 def fetch_website_links(url):
     """
-    Return the links on the webiste at the given url
+    Return the links on the website at the given url, resolved to absolute URLs
+    so that relative hrefs like "/about" become "https://example.com/about".
     I realize this is inefficient as we're parsing twice! This is to keep the code in the lab simple.
     Feel free to use a class and optimize it!
     """
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.content, "html.parser")
     links = [link.get("href") for link in soup.find_all("a")]
-    return [link for link in links if link]
+    return [urljoin(url, link) for link in links if link]

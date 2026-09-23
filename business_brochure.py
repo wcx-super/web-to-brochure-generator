@@ -1,9 +1,11 @@
 import os
 import json
+from urllib.parse import urljoin
 from dotenv import load_dotenv
 from IPython.display import Markdown, display, update_display
 from scraper import fetch_website_links, fetch_website_contents
 from openai import OpenAI
+import gradio as gr
 
 load_dotenv(override=True)
 api_key = os.getenv('OPENAI_API_KEY')
@@ -38,7 +40,7 @@ Please decide which of these are relevant web links for a brochure about the com
 respond with the full https URL in JSON format.
 Do not include Terms of Service, Privacy, email links.
 
-Links (some might be relative links):
+Links:
 
 """
     links = fetch_website_links(url)
@@ -64,7 +66,7 @@ def fetch_page_and_all_relevant_links(url):
     result = f"## Landing Page:\n\n{contents}\n## Relevant Links:\n"
     for link in relevant_links['links']:
         result += f"\n\n### Link: {link['type']}\n"
-        result += fetch_website_contents(link["url"])
+        result += fetch_website_contents(urljoin(url, link["url"]))
     return result
 
 brochure_system_prompt = """
@@ -93,6 +95,37 @@ def in_notebook():
         return False
 
 def stream_brochure(company_name, url):
+    """Gradio generator: yields (status, brochure) so the UI updates while we work."""
+    if not company_name.strip() or not url.strip():
+        yield "⚠️ Please enter both a company name and a website URL.", ""
+        return
+
+    yield f"🔍 Reading {url} and picking the relevant links...", ""
+    try:
+        user_prompt = get_brochure_user_prompt(company_name, url)
+    except Exception as e:
+        yield f"❌ Failed to fetch the website: {e}", ""
+        return
+
+    yield "✍️ Writing the brochure...", ""
+    stream = openai.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {"role": "system", "content": brochure_system_prompt},
+            {"role": "user", "content": user_prompt}
+          ],
+        stream=True
+    )
+    response = ""
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content or ''
+        response += delta
+        yield "✍️ Writing the brochure...", response
+    yield "✅ Done", response
+
+
+def stream_brochure_notebook(company_name, url):
+    """Original notebook/console version, kept for use outside Gradio."""
     stream = openai.chat.completions.create(
         model="gpt-4.1-mini",
         messages=[
@@ -100,7 +133,7 @@ def stream_brochure(company_name, url):
             {"role": "user", "content": get_brochure_user_prompt(company_name, url)}
           ],
         stream=True
-    )    
+    )
     response = ""
     display_handle = display(Markdown(""), display_id=True) if in_notebook() else None
     for chunk in stream:
@@ -113,5 +146,15 @@ def stream_brochure(company_name, url):
     if display_handle is None:
         print()
     return response
+
+
 if __name__ == "__main__":
-    stream_brochure("OpenAI", "https://openai.com")
+    input_name = gr.Textbox(label="Enter a company name", lines=1)
+    input_url = gr.Textbox(label="Enter a company website URL", lines=2)
+    status = gr.Markdown(label="Status")
+    output = gr.Markdown(label="Brochure")
+    UI = gr.Interface(fn=stream_brochure,
+                      inputs=[input_name, input_url],
+                      outputs=[status, output],
+                      flagging_mode="never")
+    UI.launch()
